@@ -492,7 +492,9 @@ class SublimeRopeListener(sublime_plugin.EventListener):
         with ropemate.context_for(view) as context:
             # TODO: general solution to syncronizing SublimeRope and Rope (Rope's observers, keep one project open)
             context.project.pycore._invalidate_resource_cache(context.resource)
-            context.importer.generate_cache(resources=[context.resource])
+            class_methods = get_setting('include_classmethods_in_globals')
+            context.importer.generate_cache(resources=[context.resource],
+                                            class_methods=class_methods)
 
 
 # =============================================================================
@@ -575,9 +577,10 @@ class PythonJumpToGlobal(sublime_plugin.TextCommand):
 
         if choice != -1:
             selected_global = self.names[choice]
+            class_methods = get_setting('include_classmethods_in_globals')
             with ropemate.context_for(self.view) as context:
                 self.locs = context.importer.get_name_locations(
-                    selected_global)
+                    selected_global, class_methods=class_methods)
                 self.locs = [loc_to_str(l) for l in self.locs]
 
                 if not self.locs:
@@ -831,13 +834,15 @@ class PythonGenerateModulesCache(sublime_plugin.TextCommand):
     Uses `generate_modules_cache` in a thread in order to build the cache'''
 
     class GenerateModulesCache(threading.Thread):
-        def __init__(self, ctx, modules):
+        def __init__(self, ctx, modules, class_methods):
             self.ctx = ctx
             self.modules = modules
+            self.class_methods = class_methods
             threading.Thread.__init__(self)
 
         def run(self):
-            self.ctx.importer.generate_modules_cache(self.modules)
+            self.ctx.importer.generate_modules_cache(self.modules,
+                                                     class_methods=self.class_methods)
             self.ctx.__exit__(None, None, None)
             self.ctx.building = False
 
@@ -850,8 +855,9 @@ class PythonGenerateModulesCache(sublime_plugin.TextCommand):
             ctx = ropemate.context_for(self.view)
             ctx.building = True
             ctx.__enter__()
+            class_methods = get_setting('include_classmethods_in_globals')
             thread = PythonGenerateModulesCache.GenerateModulesCache(
-                ctx, modules)
+                ctx, modules, class_methods)
             thread.start()
         else:
             sublime.error_message("Missing modules in configuration file")
@@ -863,13 +869,14 @@ class PythonRegenerateCache(sublime_plugin.TextCommand):
     might be neceessary.'''
 
     class RegenerateCacheThread(threading.Thread):
-        def __init__(self, ctx):
+        def __init__(self, ctx, class_methods):
             self.ctx = ctx
+            self.class_methods = class_methods
             threading.Thread.__init__(self)
 
         def run(self):
             self.ctx.importer.clear_cache()
-            self.ctx.build_cache()
+            self.ctx.build_cache(class_methods=self.class_methods)
             self.ctx.__exit__(None, None, None)
             self.ctx.building = False
 
@@ -878,7 +885,8 @@ class PythonRegenerateCache(sublime_plugin.TextCommand):
         ctx.building = True
         # we have to enter on main, but build on worker thread
         ctx.__enter__()
-        thread = PythonRegenerateCache.RegenerateCacheThread(ctx)
+        class_methods = get_setting('include_classmethods_in_globals')
+        thread = PythonRegenerateCache.RegenerateCacheThread(ctx, class_methods)
         thread.start()
 
 
