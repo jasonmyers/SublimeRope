@@ -13,16 +13,21 @@ class AutoImport(object):
 
     """
 
-    def __init__(self, project, observe=True, underlined=False):
+    def __init__(self, project, observe=True, underlined=False,
+                 class_methods=False):
         """Construct an AutoImport object
 
         If `observe` is `True`, listen for project changes and update
         the cache.
 
         If `underlined` is `True`, underlined names are cached, too.
+
+        If `class_methods` is `True`, defined class methods and properties
+        on global classes will be included in the cache, too.
         """
         self.project = project
         self.underlined = underlined
+        self.class_methods = class_methods
         self.names = project.data_files.read_data('globalnames')
         if self.names is None:
             self.names = {}
@@ -62,11 +67,14 @@ class AutoImport(object):
             result.update(set(self.names[module]))
         return result
 
-    def get_name_locations(self, name):
+    def get_name_locations(self, name, class_methods=None):
         """Return a list of ``(resource, lineno)`` tuples"""
+        if class_methods is None:
+            class_methods = self.class_methods
         result = []
         pycore = self.project.pycore
         for module in self.names:
+            resource = None
             if name in self.names[module]:
                 try:
                     pymodule = pycore.get_module(module)
@@ -74,14 +82,38 @@ class AutoImport(object):
                         pyname = pymodule[name]
                         module, lineno = pyname.get_definition_location()
                         if module is not None:
-                            resource = module.get_module().get_resource()
+                            resource = resource or module.get_module().get_resource()
                             if resource is not None and lineno is not None:
                                 result.append((resource, lineno))
+
+                    if class_methods:
+                        for pyname in self.get_classmethods_from_module(pymodule, name):
+                            module, lineno = pyname.get_definition_location()
+                            if module is not None:
+                                resource = resource or module.get_module().get_resource()
+                                if resource is not None and lineno is not None:
+                                    result.append((resource, lineno))
+
                 except exceptions.ModuleNotFoundError:
                     pass
         return result
 
-    def generate_cache(self, resources=None, underlined=None,
+    def get_classmethods_from_module(self, pymodule, name):
+        if isinstance(pymodule, pyobjects.PyDefinedObject):
+            attributes = pymodule._get_structural_attributes()
+        else:
+            attributes = pymodule.get_attributes()        
+        for cls in attributes.itervalues():
+            if isinstance(cls, (pynames.AssignedName, pynames.DefinedName)):
+                pyobject = cls.pyobject
+                if isinstance(pyobject, pyobjects.PyClass):
+                    class_attrs = pyobject._get_structural_attributes()
+                    try:
+                        yield class_attrs[name]
+                    except KeyError:
+                        pass
+
+    def generate_cache(self, resources=None, underlined=None, class_methods=None,
                        task_handle=taskhandle.NullTaskHandle()):
         """Generate global name cache for project files
 
@@ -96,10 +128,10 @@ class AutoImport(object):
             'Generatig autoimport cache', len(resources))
         for file in resources:
             job_set.started_job('Working on <%s>' % file.path)
-            self.update_resource(file, underlined)
+            self.update_resource(file, underlined, class_methods)
             job_set.finished_job()
 
-    def generate_modules_cache(self, modules, underlined=None,
+    def generate_modules_cache(self, modules, underlined=None, class_methods=None,
                                task_handle=taskhandle.NullTaskHandle()):
         """Generate global name cache for modules listed in `modules`"""
         job_set = task_handle.create_jobset(
@@ -110,7 +142,7 @@ class AutoImport(object):
                 mod = self.project.pycore.find_module(modname[:-2])
                 if mod:
                     for sub in submodules(mod):
-                        self.update_resource(sub, underlined)
+                        self.update_resource(sub, underlined, class_methods)
             else:
                 self.update_module(modname, underlined)
             job_set.finished_job()
@@ -143,44 +175,56 @@ class AutoImport(object):
         lineno = code.count('\n', 0, offset) + 1
         return lineno
 
-    def update_resource(self, resource, underlined=None):
+    def update_resource(self, resource, underlined=None, class_methods=None):
         """Update the cache for global names in `resource`"""
         try:
             pymodule = self.project.pycore.resource_to_pyobject(resource)
             modname = self._module_name(resource)
-            self._add_names(pymodule, modname, underlined)
+            self._add_names(pymodule, modname, underlined, class_methods)
         except exceptions.ModuleSyntaxError:
             pass
 
-    def update_module(self, modname, underlined=None):
+    def update_module(self, modname, underlined=None, class_methods=None):
         """Update the cache for global names in `modname` module
 
         `modname` is the name of a module.
         """
         try:
             pymodule = self.project.pycore.get_module(modname)
-            self._add_names(pymodule, modname, underlined)
+            self._add_names(pymodule, modname, underlined, class_methods)
         except exceptions.ModuleNotFoundError:
             pass
 
     def _module_name(self, resource):
         return self.project.pycore.modname(resource)
 
-    def _add_names(self, pymodule, modname, underlined):
+    def _add_names(self, pymodule, modname, underlined, class_methods):
         if underlined is None:
             underlined = self.underlined
+        if class_methods is None:
+            class_methods = self.class_methods
         globals = []
         if isinstance(pymodule, pyobjects.PyDefinedObject):
             attributes = pymodule._get_structural_attributes()
         else:
             attributes = pymodule.get_attributes()
-        for name, pyname in attributes.items():
+        for name, pyname in attributes.iteritems():
             if not underlined and name.startswith('_'):
                 continue
             if isinstance(pyname, (pynames.AssignedName, pynames.DefinedName)):
                 globals.append(name)
+                if class_methods:
+                    if isinstance(pyname.pyobject, pyobjects.PyClass):
+                        class_attributes = pyname.pyobject._get_structural_attributes()
+                        for method_name, method_pyname in class_attributes.iteritems():
+                            if not underlined and method_name.startswith('__'):
+                                continue
+                            if isinstance(method_pyname, pynames.DefinedName):
+                                globals.append(method_name)
+
             if isinstance(pymodule, builtins.BuiltinModule):
                 globals.append(name)
+
         self.names[modname] = globals
 
     def _write(self):

@@ -79,22 +79,22 @@ class RopeContext(object):
         if self.tmpfile is not None:
             os.remove(self.tmpfile.name)
 
-    def build_cache(self):
+    def build_cache(self, class_methods=None):
         key = "building_cache_for_" + self.project.address
         sublime.set_timeout(
             lambda: self.view.set_status(key, "Building Rope cache ..."),
             0)
-        self.importer.generate_cache()
+        self.importer.generate_cache(class_methods=class_methods)
         sublime.set_timeout(
             lambda: self.view.erase_status(key),
             0)
 
-    def generate_modules_cache(self, modules):
+    def generate_modules_cache(self, modules, class_methods=None):
         key = "generate_modules_cache_for_" + self.project.address
         sublime.set_timeout(
             lambda: self.view.set_status(key, "Building Modules cache ..."),
             0)
-        self.importer.generate_modules_cache(modules)
+        self.importer.generate_modules_cache(modules, class_methods=class_methods)
         self.project.sync()
         sublime.set_timeout(
             lambda: self.view.erase_status(key),
