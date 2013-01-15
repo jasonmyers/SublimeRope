@@ -235,7 +235,7 @@ class AutoImport(threading.Thread):
                 all_lines = self.view.lines(
                     sublime.Region(0, self.view.size()))
                 line_no = context.importer.find_insertion_line(context.input)
-                insert_import_str = "from %s import %s\n" % (module, name)
+                insert_import_str = "\nfrom %s import %s\n" % (module, name)
                 existing_imports_str = self.view.substr(
                     sublime.Region(all_lines[0].a, all_lines[line_no - 1].b))
 
