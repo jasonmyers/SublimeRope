@@ -126,7 +126,7 @@ class AutoImport(object):
 
     def find_insertion_line(self, code):
         """Guess at what line the new import should be inserted"""
-        match = re.search(r'^(def|class)\s+', code)
+        match = re.search(r'^(@|def\s|class\s)', code)
         if match is not None:
             code = code[:match.start()]
         try:
